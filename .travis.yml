@@ -1,0 +1,12 @@
+script:
+- shellcheck kube-vagrant
+before_deploy: tar -czvf kube-vagrant.tar.gz kube-vagrant LICENSE
+deploy:
+  provider: releases
+  api_key:
+    secure: VfkvBK2PsYGhs4zkhL+NvsrgtIiy6LSCqClgel/c3wfpwCVqlIAgcDScAGlSfH7o2LtWqtCoiKxH8dpbbD4cZF1nq6N07NH+RT6FnJ5IH1sP22uuNeqdldBucO1KlYyUhhqo52IruFVUinjqY1aVrzX+dCfQhyrHnQikzBMk8ZvUzo3dLMGpOyru6CG9H9sKULYzsyQUASLxmRCI1/mbl/dcPJpTPLJIGRx6XutHtFbx/6qXOpMgfP8+YSXCa5geeNENXFDf28EYTSDvYvbNERaCE0rQA8TdpiqP0kbBi/HUgwNcFeQnG/ZXcZ0+9EiRXUpLeC3o8OLttP7NR45lZElZnFZYdeo0rMr//jDio7AvrjdyR2NkHzmqrPA6Oj/+eCLnzHR38Sp4xTJnAmmn7ou83jknI56DqT3gSKzljBK0YNSEJ4QWZFEP7sbCn2zjvJ9YwpJPkQPBg+38VTQ1Gcj3IEVX7Lhq5VJsUhOjTtgS32CPxOEj8KWJTW8BHdcTUeMjH8S6h3El0T/Wa0t8NQraYZfWNN5/R5XWBzmF+DDWQ/4cCjyzwBYJWXFAnjBDGbLYe7d1AQlk0eAmbVoLmQeaCNrRuFygDTMYO1hdQ4h6MY8tenFyG0JjbJGTyTYbBfJNCdhBjf0mbodXwGW/bSScV/KoMI6F/RrinbN+/1w=
+  file: kube-vagrant.tar.gz
+  draft: false
+  skip_cleanup: true
+  on:
+    repo: huazhihao/kube-vagrant

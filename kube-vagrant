@@ -1,0 +1,202 @@
+#!/usr/bin/env bash
+#
+# create a multi-node kubernetes cluster with vagrant
+
+# Copyright © 2019 Hua Zhihao <ihuazhihao@gmail.com>
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+[[ -n $DEBUG ]] && set -x
+
+set -eou pipefail
+IFS=$'\n\t'
+
+usage() {
+  local SELF
+  SELF="kube-vagrant"
+  if [[ "$(basename "$0")" == kubectl-* ]]; then
+    SELF="kubectl vagrant"
+  fi
+
+  cat <<EOF
+kube-vagrant creates a multi-node kubernetes cluster locally with vagrant
+
+Usage:
+
+  $SELF up
+  kubectl --kubeconfig=.kube/config cluster-info
+
+Examples:
+
+  # create a cluster with a subnet "192.168.0.0/16" as pod network cidr
+  $SELF up --pod-network-cidr="192.168.0.0/16"
+
+  # create a cluster with 1 master node and 2 worker nodes
+  $SELF up --master-node-count=1 --worker-node-count=2
+
+  # create a cluster with master node given 2048Mb memory and worker node given
+  # 2048Mb memory
+  $SELF up --master-node-memory=2048 --worker-node-memory=2048
+
+  # create a cluster with public network bridged by nic "en0: Wi-Fi (AirPort)"
+  $SELF up --public-network-bridge="en0: Wi-Fi (AirPort)"
+
+  # suspend the vagrant VMs for the cluster created under the current directory
+  $SELF suspend
+
+  # destroy the vagrant VMs for the cluster created under the current directory
+  $SELF destroy
+EOF
+}
+
+exit_err() {
+   echo >&2 "${1}"
+   exit 1
+}
+
+dump_vagrantfile() {
+    cat > ./Vagrantfile <<EOF
+# -*- mode: ruby -*-
+# vi: set ft=ruby :
+
+BOX_IMAGE = "huazhihao/kubeadm"
+MASTER_NODE_COUNT = (ENV["MASTER_NODE_COUNT"] || "1").to_i
+WORKER_NODE_COUNT = (ENV["WORKER_NODE_COUNT"] || "2").to_i
+MASTER_NODE_MEMORY = (ENV["MASTER_NODE_MEMORY"] || "2048").to_i
+WORKER_NODE_MEMORY = (ENV["WORKER_NODE_MEMORY"] || "2048").to_i
+PUBLIC_NETOWORK_BRIDGE = ENV["PUBLIC_NETOWORK_BRIDGE"] || "en0: Wi-Fi (AirPort)"
+POD_NETWORK_CIDR = ENV["POD_NETWORK_CIDR"] || "192.168.0.0/16"
+
+Vagrant.configure("2") do |config|
+  config.vm.provision "shell",
+    run: "always",
+    inline: "swapoff -a"
+
+  (0..MASTER_NODE_COUNT-1).each do |i|
+    config.vm.define "master-#{i + 1}" do |subconfig|
+      subconfig.vm.box = BOX_IMAGE
+      subconfig.vm.hostname = "master-#{i + 1}"
+      subconfig.vm.network "private_network", ip: "10.8.8.#{i + 10}"
+      if PUBLIC_NETOWORK_BRIDGE != ""
+        subconfig.vm.network "public_network", bridge: PUBLIC_NETOWORK_BRIDGE
+      end
+      subconfig.vm.provider :virtualbox do |virtualbox|
+        virtualbox.memory = MASTER_NODE_MEMORY
+      end
+      if i == 0
+        subconfig.vm.provision "shell", inline: <<-SHELL
+          set -eux
+          kubeadm init --pod-network-cidr #{POD_NETWORK_CIDR} --apiserver-advertise-address 10.8.8.10
+          kubeadm token create --print-join-command > /vagrant/.join-command
+          mkdir -p /home/vagrant/.kube
+          cp -i /etc/kubernetes/admin.conf /home/vagrant/.kube/config
+          chown vagrant:vagrant /home/vagrant/.kube/config
+          rm /vagrant/.kube -rf
+          mkdir -p /vagrant/.kube
+          cp -i /etc/kubernetes/admin.conf /vagrant/.kube/config
+          chown vagrant:vagrant /vagrant/.kube/config
+          mkdir -p /root/.kube
+          cp -i /etc/kubernetes/admin.conf /root/.kube/config
+
+          curl -s https://docs.projectcalico.org/v3.11/manifests/calico.yaml | sed "s?192.168.0.0/16?#{POD_NETWORK_CIDR}?g" | kubectl apply -f -
+          echo KUBELET_EXTRA_ARGS=--node-ip=10.8.8.10 > /etc/default/kubelet
+        SHELL
+      end
+
+    end
+  end
+
+  (0..WORKER_NODE_COUNT-1).each do |i|
+    config.vm.define "worker-#{i + 1}" do |subconfig|
+      subconfig.vm.box = BOX_IMAGE
+      subconfig.vm.hostname = "worker-#{i + 1}"
+      subconfig.vm.network "private_network", ip: "10.8.8.#{i + 20}"
+      if PUBLIC_NETOWORK_BRIDGE != ""
+        subconfig.vm.network "public_network", bridge: PUBLIC_NETOWORK_BRIDGE
+      end
+      subconfig.vm.provider :virtualbox do |virtualbox|
+        virtualbox.memory = WORKER_NODE_MEMORY
+      end
+      subconfig.vm.provision "shell", inline: <<-SHELL
+        while [ ! -f /vagrant/.join-command ]; do
+          sleep 1
+        done
+
+        sh /vagrant/.join-command
+        echo KUBELET_EXTRA_ARGS=--node-ip=10.8.8.#{i + 20} > /etc/default/kubelet
+      SHELL
+    end
+  end
+end
+
+EOF
+}
+
+main() {
+  command -v vagrant &> /dev/null || exit_err "You must have vagrant installed locally"
+
+  while [ $# -gt 0 ]; do
+    param=$(echo "${1}" | awk -F= '{print $1}')
+    value=$(echo "${1}" | awk -F= '{print $2}')
+    case "$param" in
+      -h | --help)
+          usage
+          exit
+          ;;
+      --pod-network-cidr)
+          export POD_NETWORK_CIDR="$value"
+          ;;
+      --master-node-count)
+          export MASTER_NODE_COUNT="$value"
+          ;;
+      --worker-node-count)
+          export WORKER_NODE_COUNT="$value"
+          ;;
+      --master-node-memory)
+          export MASTER_NODE_MEMORY="$value"
+          ;;
+      --worker-node-memory)
+          export WORKER_NODE_MEMORY="$value"
+          ;;
+      --public-network-bridge)
+          export PUBLIC_NETOWORK_BRIDGE="$value"
+          ;;
+      up | suspend | destroy)
+          cmd=$param
+          ;;
+      *)
+          exit_err "ERROR: unknown parameter \"$1\""
+          ;;
+    esac
+    shift
+  done
+
+  case "$cmd" in
+    up)
+        dump_vagrantfile
+        vagrant up
+        ;;
+    suspend)
+        vagrant suspend
+        ;;
+    destroy)
+        vagrant destroy -f
+        rm -rf .kube
+        rm -rf .vagrant
+        rm -f .join-command
+        rm -f Vagrantfile
+        ;;
+  esac
+}
+
+main "$@"

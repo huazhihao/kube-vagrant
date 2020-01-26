@@ -1,0 +1,6 @@
+.vagrant
+*.log
+bin/*
+.join-command
+.kube
+Vagrantfile
